@@ -1,12 +1,13 @@
 #!/bin/bash
 # ==============================================================================
 # User Data Script para Amazon Linux 2023 - Cascos Ultra (Black Friday)
-# Configura NGINX e inyecta dinámicamente los metadatos de la instancia
+# Configura el Servidor Web (NGINX), el Servidor de Aplicación (Python Microservice)
+# y el Monitor de Procesos del Sistema Operativo en Tiempo Real
 # ==============================================================================
 
-# 1. Actualizar sistema e instalar NGINX y utilidades
+# 1. Actualizar sistema e instalar NGINX, utilidades y monitor
 dnf update -y
-dnf install -y nginx stress-ng
+dnf install -y nginx stress-ng python3 procps-ng curl
 
 # 2. Consultar AWS IMDSv2 (Instance Metadata Service v2)
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
@@ -15,155 +16,198 @@ INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.2
 AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
 LOCAL_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
 
-# 3. Configurar Headers en NGINX para inspección HTTP
-cat <<EOF > /etc/nginx/conf.d/headers.conf
-add_header X-Served-By "$INSTANCE_ID" always;
-add_header X-Availability-Zone "$AZ" always;
-add_header X-Local-IP "$LOCAL_IP" always;
+# Guardar variables de entorno para servicios
+cat <<ENVFILE > /etc/cascos.env
+INSTANCE_ID=$INSTANCE_ID
+AZ=$AZ
+LOCAL_IP=$LOCAL_IP
+ENVFILE
+
+# 3. Crear el Servidor de Aplicación (Backend de Procesos y Telemetría en Python)
+mkdir -p /opt/cascos
+
+cat <<'PYEOF' > /opt/cascos/server.py
+import http.server
+import socketserver
+import subprocess
+import json
+import os
+import time
+
+PORT = 5000
+
+class CascosAPIHandler(http.server.BaseHTTPRequestHandler):
+    def _send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+
+    def do_OPTIONS(self):
+        self._send_json({})
+
+    def do_GET(self):
+        if self.path == '/api/system':
+            uptime_text = "En línea"
+            try:
+                with open('/proc/uptime', 'r') as f:
+                    uptime_seconds = float(f.readline().split()[0])
+                    hours = int(uptime_seconds // 3600)
+                    minutes = int((uptime_seconds % 3600) // 60)
+                    uptime_text = f"{hours}h {minutes}m"
+            except Exception:
+                pass
+
+            ram_text = "N/A"
+            try:
+                with open('/proc/meminfo', 'r') as f:
+                    mem = {}
+                    for line in f:
+                        parts = line.split(':')
+                        if len(parts) == 2:
+                            mem[parts[0].strip()] = int(parts[1].strip().split()[0])
+                    total_mb = mem.get('MemTotal', 1) // 1024
+                    avail_mb = mem.get('MemAvailable', 0) // 1024
+                    used_mb = total_mb - avail_mb
+                    ram_text = f"{used_mb} MB / {total_mb} MB"
+            except Exception:
+                pass
+
+            cpu_val = 15.0
+            try:
+                out = subprocess.check_output("ps -A -o %cpu | awk '{s+=$1} END {print s}'", shell=True).decode().strip()
+                cpu_val = float(out) if out else 15.0
+            except Exception:
+                pass
+
+            data = {
+                "instance_id": os.environ.get("INSTANCE_ID", "i-unknown"),
+                "az": os.environ.get("AZ", "us-east-1a"),
+                "local_ip": os.environ.get("LOCAL_IP", "127.0.0.1"),
+                "cpu_percent": cpu_val,
+                "ram_text": ram_text,
+                "uptime_text": uptime_text,
+                "timestamp": int(time.time())
+            }
+            self._send_json(data)
+
+        elif self.path == '/api/processes':
+            processes = []
+            try:
+                cmd = "ps -eo pid,user,%cpu,%mem,stat,comm --sort=-%cpu | head -n 35"
+                output = subprocess.check_output(cmd, shell=True).decode('utf-8')
+                lines = output.strip().split('\n')
+                for line in lines[1:]:
+                    parts = line.split(None, 5)
+                    if len(parts) >= 6:
+                        processes.append({
+                            "pid": int(parts[0]) if parts[0].isdigit() else parts[0],
+                            "user": parts[1],
+                            "cpu": parts[2],
+                            "mem": parts[3],
+                            "stat": parts[4],
+                            "comm": parts[5]
+                        })
+            except Exception as e:
+                processes = [{"pid": 0, "user": "err", "cpu": 0, "mem": 0, "stat": "E", "comm": str(e)}]
+            self._send_json({"processes": processes})
+
+        else:
+            self._send_json({"error": "Endpoint no encontrado"}, status=404)
+
+    def do_POST(self):
+        if self.path == '/api/stress':
+            try:
+                subprocess.Popen(["stress-ng", "--cpu", "2", "--timeout", "60s"])
+                self._send_json({"status": "stress_started", "duration": 60})
+            except Exception as e:
+                self._send_json({"status": "error", "message": str(e)}, status=500)
+        elif self.path == '/api/stress/stop':
+            try:
+                subprocess.run(["pkill", "-9", "stress-ng"], check=False)
+                self._send_json({"status": "stress_stopped"})
+            except Exception as e:
+                self._send_json({"status": "error", "message": str(e)}, status=500)
+        else:
+            self._send_json({"error": "Endpoint no encontrado"}, status=404)
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+
+if __name__ == '__main__':
+    server = ThreadedHTTPServer(('127.0.0.1', PORT), CascosAPIHandler)
+    server.serve_forever()
+PYEOF
+
+# 4. Configurar e Iniciar Servicio Systemd para el Backend de Aplicación
+cat <<'SERVICE' > /etc/systemd/system/cascos-backend.service
+[Unit]
+Description=Cascos Ultra Application Server & Process Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/cascos.env
+ExecStart=/usr/bin/python3 /opt/cascos/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+systemctl daemon-reload
+systemctl enable cascos-backend
+systemctl start cascos-backend
+
+# 5. Configurar NGINX como Servidor Web y Reverse Proxy para /api/
+cat <<EOF > /etc/nginx/conf.d/cascos.conf
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    add_header X-Served-By "$INSTANCE_ID" always;
+    add_header X-Availability-Zone "$AZ" always;
+    add_header X-Local-IP "$LOCAL_IP" always;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+}
 EOF
 
-# 4. Descargar o generar el archivo HTML con los metadatos reales inyectados
-# (Reemplazando los placeholders con las variables extraídas de IMDSv2)
-cat <<'EOF' > /tmp/template.html
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cascos Ultra | Black Friday - Prueba de Escalamiento AWS</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-base: #0a0b10;
-            --bg-surface: #12141f;
-            --bg-card: #181b2a;
-            --accent-red: #ff334b;
-            --accent-red-glow: rgba(255, 51, 75, 0.4);
-            --accent-green: #00ff88;
-            --accent-cyan: #00e5ff;
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
-            --border-color: #262b42;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background-color: var(--bg-base); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; }
-        .top-ticker { background: linear-gradient(90deg, #ff334b, #99001f); color: white; font-size: 0.82rem; font-weight: 700; letter-spacing: 1.5px; padding: 8px 15px; text-align: center; text-transform: uppercase; display: flex; align-items: center; justify-content: center; gap: 12px; }
-        .pulse-dot { width: 8px; height: 8px; background-color: #fff; border-radius: 50%; display: inline-block; animation: pulse 1s infinite alternate; }
-        @keyframes pulse { from { opacity: 0.4; transform: scale(0.8); } to { opacity: 1; transform: scale(1.3); } }
-        header { background-color: rgba(18, 20, 31, 0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; padding: 15px 5%; display: flex; justify-content: space-between; align-items: center; }
-        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-        .brand-text { font-family: 'Orbitron', sans-serif; font-size: 1.4rem; font-weight: 900; color: white; }
-        .brand-text span { color: var(--accent-red); }
-        .badge-live { background: rgba(0, 255, 136, 0.1); border: 1px solid var(--accent-green); color: var(--accent-green); padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 30px 20px; width: 100%; }
-        .server-inspector { background: linear-gradient(135deg, #161928, #10121d); border: 2px solid var(--accent-cyan); border-radius: 16px; padding: 24px 28px; margin-bottom: 40px; box-shadow: 0 10px 30px rgba(0, 229, 255, 0.12); position: relative; }
-        .server-inspector::before { content: 'AWS AUTO SCALING ACTIVE'; position: absolute; top: 12px; right: 20px; font-family: 'Orbitron', sans-serif; font-size: 0.65rem; color: var(--accent-cyan); letter-spacing: 2px; }
-        .inspector-title { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-        .inspector-title h2 { font-family: 'Orbitron', sans-serif; font-size: 1.25rem; color: white; }
-        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
-        .metric-card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 14px 18px; }
-        .metric-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-        .metric-value { font-family: monospace; font-size: 1.15rem; font-weight: 700; color: #fff; }
-        .metric-value.highlight { color: var(--accent-green); text-shadow: 0 0 10px rgba(0, 255, 136, 0.4); }
-        .refresh-zone { margin-top: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-        .btn-test { background: linear-gradient(135deg, var(--accent-cyan), #0088cc); color: #040914; font-weight: 700; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; }
-        .hero { text-align: center; margin-bottom: 50px; }
-        .hero h1 { font-family: 'Orbitron', sans-serif; font-size: clamp(2rem, 5vw, 3.5rem); margin-bottom: 12px; }
-        .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 25px; }
-        .product-card { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 14px; padding: 20px; text-align: center; }
-        .product-img { font-size: 4rem; margin-bottom: 10px; }
-        .price { font-family: 'Orbitron', sans-serif; font-size: 1.4rem; color: var(--accent-green); font-weight: 800; margin-top: 10px; }
-        .old-price { color: #6b7280; text-decoration: line-through; font-size: 0.9rem; }
-        footer { margin-top: auto; background-color: var(--bg-surface); border-top: 1px solid var(--border-color); padding: 25px; text-align: center; font-size: 0.85rem; color: var(--text-muted); }
-    </style>
-</head>
-<body>
-    <div class="top-ticker">
-        <span class="pulse-dot"></span>
-        <span>BLACK FRIDAY CASCOS ULTRA &bull; TRÁFICO SIMULADO EN VIVO &bull; AWS FREE TIER</span>
-        <span class="pulse-dot"></span>
-    </div>
-    <header>
-        <div class="brand">
-            <span style="font-size:1.8rem">🪖</span>
-            <div class="brand-text">CASCOS<span>ULTRA</span></div>
-        </div>
-        <div class="badge-live">
-            <span class="pulse-dot" style="background-color: var(--accent-green);"></span>
-            <span>NODO ONLINE</span>
-        </div>
-    </header>
-    <div class="container">
-        <section class="server-inspector">
-            <div class="inspector-title">
-                <span style="font-size: 1.6rem;">⚡</span>
-                <h2>Servidor Web que te Atiende</h2>
-            </div>
-            <div class="metrics-grid">
-                <div class="metric-card">
-                    <div class="metric-label">🏷️ Instance ID (EC2)</div>
-                    <div class="metric-value highlight">__INSTANCE_ID__</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">🌐 Availability Zone</div>
-                    <div class="metric-value">__AZ__</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">🔒 IP Privada del Host</div>
-                    <div class="metric-value">__LOCAL_IP__</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">⚙️ Servidor Web</div>
-                    <div class="metric-value">NGINX 1.24 (AL2023)</div>
-                </div>
-            </div>
-            <div class="refresh-zone">
-                <div style="font-size:0.85rem; color:#9ca3af;">
-                    💡 <em>Recarga para consultar al Application Load Balancer (ALB) y verificar el escalamiento horizontal.</em>
-                </div>
-                <button class="btn-test" onclick="window.location.reload(true);">🔄 Probar Balanceo (Recargar)</button>
-            </div>
-        </section>
-        <section class="hero">
-            <h1>Protección Extrema<br><span style="color:var(--accent-red)">50% OFF Black Friday</span></h1>
-            <p>Cascos de alta gama probando la elasticidad horizontal en AWS EC2.</p>
-        </section>
-        <div class="products-grid">
-            <div class="product-card">
-                <div class="product-img">🏎️</div>
-                <h3>Ultra Carbon Track Pro</h3>
-                <div class="old-price">$499 USD</div>
-                <div class="price">$249 USD</div>
-            </div>
-            <div class="product-card">
-                <div class="product-img">🏍️</div>
-                <h3>Adventure GT Modular</h3>
-                <div class="old-price">$360 USD</div>
-                <div class="price">$199 USD</div>
-            </div>
-            <div class="product-card">
-                <div class="product-img">⚡</div>
-                <h3>Titan Enduro MX-Apex</h3>
-                <div class="old-price">$320 USD</div>
-                <div class="price">$145 USD</div>
-            </div>
-        </div>
-    </div>
-    <footer>
-        <p><strong>Cascos Ultra &copy; 2026</strong> &bull; AWS VPC 10.0.0.0/16 &bull; 3 Subredes Públicas &bull; ALB + Target Tracking ASG</p>
-    </footer>
-</body>
-</html>
-EOF
+# Remover configuración por defecto que pueda entrar en conflicto
+rm -f /etc/nginx/conf.d/default.conf
 
-# 5. Sustituir variables y mover a la ruta pública de NGINX
+# 6. Descargar el Frontend interactivo directamente desde el repositorio
+mkdir -p /usr/share/nginx/html
+
+curl -s -L https://raw.githubusercontent.com/DanyArias/cascos-ultra/main/index.html -o /tmp/template.html
+
+# Sustituir placeholders por metadatos reales de IMDSv2
 sed -e "s/__INSTANCE_ID__/$INSTANCE_ID/g" \
     -e "s/__AZ__/$AZ/g" \
     -e "s/__LOCAL_IP__/$LOCAL_IP/g" \
     /tmp/template.html > /usr/share/nginx/html/index.html
 
-# 6. Iniciar y habilitar NGINX
+# 7. Iniciar y habilitar NGINX
 systemctl restart nginx
 systemctl enable nginx
