@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cascos Ultra | Black Friday - Prueba de Escalamiento AWS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0a0b10;
+            --bg-surface: #12141f;
+            --bg-card: #181b2a;
+            --accent-red: #ff334b;
+            --accent-red-glow: rgba(255, 51, 75, 0.4);
+            --accent-green: #00ff88;
+            --accent-cyan: #00e5ff;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --border-color: #262b42;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* BANNER TOPE */
+        .top-ticker {
+            background: linear-gradient(90deg, #ff334b, #99001f);
+            color: white;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            padding: 8px 15px;
+            text-align: center;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #fff;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 10px white;
+            animation: pulse 1s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { opacity: 0.4; transform: scale(0.8); }
+            to { opacity: 1; transform: scale(1.3); }
+        }
+
+        /* NAVEGACIÓN */
+        header {
+            background-color: rgba(18, 20, 31, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            padding: 15px 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .brand-logo {
+            font-size: 1.8rem;
+        }
+
+        .brand-text {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.4rem;
+            font-weight: 900;
+            color: white;
+            letter-spacing: 1px;
+        }
+
+        .brand-text span {
+            color: var(--accent-red);
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .badge-live {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid var(--accent-green);
+            color: var(--accent-green);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .cart-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .cart-btn:hover {
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        /* CONTENEDOR PRINCIPAL */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 30px 20px;
+            width: 100%;
+        }
+
+        /* PANEL DEL SERVIDOR AWS (DIAGNÓSTICO) */
+        .server-inspector {
+            background: linear-gradient(135deg, #161928, #10121d);
+            border: 2px solid var(--accent-cyan);
+            border-radius: 16px;
+            padding: 24px 28px;
+            margin-bottom: 40px;
+            box-shadow: 0 10px 30px rgba(0, 229, 255, 0.12);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .server-inspector::before {
+            content: 'AWS AUTO SCALING ACTIVE';
+            position: absolute;
+            top: 12px;
+            right: 20px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.65rem;
+            color: var(--accent-cyan);
+            letter-spacing: 2px;
+            opacity: 0.8;
+        }
+
+        .inspector-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .inspector-title h2 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.25rem;
+            color: white;
+            font-weight: 800;
+        }
+
+        .inspector-badge {
+            background: var(--accent-cyan);
+            color: #000;
+            font-weight: 800;
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 10px;
+            padding: 14px 18px;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent-cyan);
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .metric-value {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #fff;
+            word-break: break-all;
+        }
+
+        .metric-value.highlight {
+            color: var(--accent-green);
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.4);
+        }
+
+        .refresh-zone {
+            margin-top: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .refresh-info {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .btn-test {
+            background: linear-gradient(135deg, var(--accent-cyan), #0088cc);
+            color: #040914;
+            font-family: 'Inter', sans-serif;
+            font-weight: 700;
+            font-size: 0.9rem;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-test:hover {
+            filter: brightness(1.15);
+            transform: scale(1.02);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+
+        /* SECCIÓN HERO BLACK FRIDAY */
+        .hero {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .hero-tag {
+            font-family: 'Orbitron', sans-serif;
+            color: var(--accent-red);
+            font-size: 0.9rem;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            display: inline-block;
+            margin-bottom: 12px;
+            text-shadow: 0 0 12px var(--accent-red-glow);
+        }
+
+        .hero h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: clamp(2rem, 5vw, 3.8rem);
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+        }
+
+        .hero h1 span {
+            color: transparent;
+            -webkit-text-stroke: 1.5px #fff;
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 650px;
+            margin: 0 auto;
+        }
+
+        /* CATÁLOGO DE PRODUCTOS */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-bottom: 25px;
+        }
+
+        .section-header h3 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.5rem;
+            color: white;
+        }
+
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 25px;
+        }
+
+        .product-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.25s ease;
+            position: relative;
+        }
+
+        .product-card:hover {
+            transform: translateY(-6px);
+            border-color: var(--accent-red);
+            box-shadow: 0 12px 30px rgba(255, 51, 75, 0.15);
+        }
+
+        .discount-pill {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            background: var(--accent-red);
+            color: white;
+            font-weight: 800;
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 6px;
+            z-index: 2;
+        }
+
+        .product-img {
+            height: 190px;
+            background: linear-gradient(180deg, #22273d, #141624);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 4.5rem;
+            user-select: none;
+        }
+
+        .product-details {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        .product-cat {
+            font-size: 0.75rem;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .product-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 12px;
+        }
+
+        .pricing {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            margin-top: auto;
+            margin-bottom: 16px;
+        }
+
+        .current-price {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.4rem;
+            font-weight: 900;
+            color: var(--accent-green);
+        }
+
+        .old-price {
+            font-size: 0.9rem;
+            color: #6b7280;
+            text-decoration: line-through;
+        }
+
+        .btn-buy {
+            width: 100%;
+            background-color: transparent;
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+            padding: 10px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-buy:hover {
+            background-color: var(--accent-red);
+            color: white;
+            box-shadow: 0 0 15px var(--accent-red-glow);
+        }
+
+        /* PIE DE PÁGINA */
+        footer {
+            margin-top: auto;
+            background-color: var(--bg-surface);
+            border-top: 1px solid var(--border-color);
+            padding: 30px 20px;
+            text-align: center;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .footer-specs {
+            margin-top: 8px;
+            font-family: monospace;
+            color: #64748b;
+        }
+
+        /* NOTIFICACIÓN TOAST */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #111827;
+            border: 1px solid var(--accent-green);
+            color: white;
+            padding: 14px 22px;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Ticker promocional -->
+    <div class="top-ticker">
+        <span class="pulse-dot"></span>
+        <span>BLACK FRIDAY CASCOS ULTRA &bull; HASTA 50% OFF &bull; TRÁFICO SIMULADO EN VIVO &bull; AWS FREE TIER</span>
+        <span class="pulse-dot"></span>
+    </div>
+
+    <!-- Navegación -->
+    <header>
+        <a href="#" class="brand">
+            <span class="brand-logo">🪖</span>
+            <div class="brand-text">CASCOS<span>ULTRA</span></div>
+        </a>
+        <div class="nav-actions">
+            <div class="badge-live">
+                <span class="pulse-dot" style="background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                <span>NODO ONLINE</span>
+            </div>
+            <button class="cart-btn" onclick="showToast('🛒 Carrito actualizado (1 artículo agregado)')">
+                🛒 Carrito (<span id="cart-count">0</span>)
+            </button>
+        </div>
+    </header>
+
+    <div class="container">
+
+        <!-- ============================================================== -->
+        <!-- PANEL DE IDENTIFICACIÓN DEL SERVIDOR DE APLICACIÓN (NGINX/AWS) -->
+        <!-- ============================================================== -->
+        <section class="server-inspector">
+            <div class="inspector-title">
+                <span style="font-size: 1.6rem;">⚡</span>
+                <h2>Servidor Web que te Atiende</h2>
+                <span class="inspector-badge">NGINX / EC2</span>
+            </div>
+
+            <div class="metrics-grid">
+                <!-- ID de la Instancia EC2 -->
+                <div class="metric-card">
+                    <div class="metric-label">
+                        <span>🏷️</span> Instance ID (EC2)
+                    </div>
+                    <div class="metric-value highlight" id="srv-instance-id">
+                        <!-- Reemplazado dinámicamente por User Data con IMDSv2 -->
+                        i-0a1b2c3d4e5f67890
+                    </div>
+                </div>
+
+                <!-- Zona de Disponibilidad (Multi-AZ) -->
+                <div class="metric-card">
+                    <div class="metric-label">
+                        <span>🌐</span> Availability Zone
+                    </div>
+                    <div class="metric-value" id="srv-az">
+                        us-east-1a
+                    </div>
+                </div>
+
+                <!-- Dirección IP Privada (Subred) -->
+                <div class="metric-card">
+                    <div class="metric-label">
+                        <span>🔒</span> IP Privada del Host
+                    </div>
+                    <div class="metric-value" id="srv-ip">
+                        10.0.1.45
+                    </div>
+                </div>
+
+                <!-- Servidor de Aplicación -->
+                <div class="metric-card">
+                    <div class="metric-label">
+                        <span>⚙️</span> Servidor Web / OS
+                    </div>
+                    <div class="metric-value" id="srv-web">
+                        NGINX 1.24 (AL2023)
+                    </div>
+                </div>
+            </div>
+
+            <div class="refresh-zone">
+                <div class="refresh-info">
+                    💡 <em>Al refrescar la página tras una prueba de estrés, el <strong>Application Load Balancer (ALB)</strong> te dirigirá a otra instancia generada por el Auto Scaling Group.</em>
+                </div>
+                <button class="btn-test" onclick="testScalingReload()">
+                    <span>🔄</span> Probar Balanceo (Recargar)
+                </button>
+            </div>
+        </section>
+
+        <!-- HERO SECTION BLACK FRIDAY -->
+        <section class="hero">
+            <div class="hero-tag">Edición Especial Black Friday</div>
+            <h1>Protección Máxima<br><span>Precios de Destrucción</span></h1>
+            <p>Siente la adrenalina sobre el asfalto con la tecnología en cascos de fibra de carbono más avanzada del mundo.</p>
+        </section>
+
+        <!-- CATÁLOGO DEMO CASCOS ULTRA -->
+        <section>
+            <div class="section-header">
+                <h3>Ofertas Relámpago Black Friday</h3>
+                <span style="color: var(--accent-red); font-weight: 700; font-size: 0.9rem;">Termina en 04:22:15</span>
+            </div>
+
+            <div class="products-grid">
+                <!-- Producto 1 -->
+                <div class="product-card">
+                    <span class="discount-pill">-50% OFF</span>
+                    <div class="product-img">🏎️</div>
+                    <div class="product-details">
+                        <span class="product-cat">Fibra de Carbono 12K</span>
+                        <h4 class="product-title">Ultra Carbon Track Pro</h4>
+                        <div class="pricing">
+                            <span class="current-price">$249 USD</span>
+                            <span class="old-price">$499 USD</span>
+                        </div>
+                        <button class="btn-buy" onclick="addToCart('Ultra Carbon Track Pro')">Agregar al Carrito</button>
+                    </div>
+                </div>
+
+                <!-- Producto 2 -->
+                <div class="product-card">
+                    <span class="discount-pill">-45% OFF</span>
+                    <div class="product-img">🏍️</div>
+                    <div class="product-details">
+                        <span class="product-cat">Modular Touring</span>
+                        <h4 class="product-title">Adventure GT Dual-Visor</h4>
+                        <div class="pricing">
+                            <span class="current-price">$199 USD</span>
+                            <span class="old-price">$360 USD</span>
+                        </div>
+                        <button class="btn-buy" onclick="addToCart('Adventure GT Dual-Visor')">Agregar al Carrito</button>
+                    </div>
+                </div>
+
+                <!-- Producto 3 -->
+                <div class="product-card">
+                    <span class="discount-pill">-55% OFF</span>
+                    <div class="product-img">⚡</div>
+                    <div class="product-details">
+                        <span class="product-cat">Off-Road / Enduro</span>
+                        <h4 class="product-title">Titan Enduro MX-Apex</h4>
+                        <div class="pricing">
+                            <span class="current-price">$145 USD</span>
+                            <span class="old-price">$320 USD</span>
+                        </div>
+                        <button class="btn-buy" onclick="addToCart('Titan Enduro MX-Apex')">Agregar al Carrito</button>
+                    </div>
+                </div>
+
+                <!-- Producto 4 -->
+                <div class="product-card">
+                    <span class="discount-pill">-40% OFF</span>
+                    <div class="product-img">🛡️</div>
+                    <div class="product-details">
+                        <span class="product-cat">Urbano / Custom</span>
+                        <h4 class="product-title">Stealth Matte Black Edition</h4>
+                        <div class="pricing">
+                            <span class="current-price">$165 USD</span>
+                            <span class="old-price">$275 USD</span>
+                        </div>
+                        <button class="btn-buy" onclick="addToCart('Stealth Matte Black Edition')">Agregar al Carrito</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- TOAST NOTIFICACIÓN -->
+    <div class="toast" id="toast-msg">
+        <span style="font-size: 1.2rem;">✅</span>
+        <span id="toast-text">Artículo añadido</span>
+    </div>
+
+    <!-- FOOTER -->
+    <footer>
+        <p><strong>Cascos Ultra &copy; 2026</strong> — Infraestructura de Demostración para Prueba de Carga y Escalamiento Horizontal.</p>
+        <p class="footer-specs">Arquitectura: AWS VPC 10.0.0.0/16 &bull; 3 Subredes Públicas &bull; ALB + Target Tracking ASG &bull; Capa Gratuita (Free Tier)</p>
+    </footer>
+
+    <!-- SCRIPT INTERACTIVO -->
+    <script>
+        let itemsInCart = 0;
+
+        function addToCart(productName) {
+            itemsInCart++;
+            document.getElementById('cart-count').innerText = itemsInCart;
+            showToast(`🔥 Agregaste "${productName}" al carrito`);
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast-msg');
+            const text = document.getElementById('toast-text');
+            text.innerText = message;
+            toast.style.display = 'flex';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function testScalingReload() {
+            // Forzar recarga sin caché para consultar al Application Load Balancer
+            window.location.reload(true);
+        }
+    </script>
+</body>
+</html>
